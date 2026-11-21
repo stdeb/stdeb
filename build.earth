@@ -16,7 +16,7 @@ BUILD:
 		# Build deps \
 		debhelper dh-python python3-all python3-pip python3-setuptools \
 		# Install deps \
-		python3-requests apt-file \
+		python3-requests python3-packaging apt-file \
 		# Pip install deps \
 		python3-venv \
 		# Test deps \

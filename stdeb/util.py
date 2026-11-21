@@ -330,6 +330,76 @@ def load_module(name, fname):
     return module
 
 
+
+def _split_sections(requirements):
+    """Yield (section, lines) pairs from a requires.txt style input.
+
+    Replacement for pkg_resources.split_sections().
+    """
+    try:
+        string_types = basestring  # Python 2
+    except NameError:
+        string_types = str
+    if isinstance(requirements, string_types):
+        requirements = [requirements]
+    section = None
+    content = []
+    for chunk in requirements:
+        for line in chunk.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if line.startswith('['):
+                if not line.endswith(']'):
+                    raise ValueError('Invalid section heading', line)
+                if section or content:
+                    yield section, content
+                section = line[1:-1].strip()
+                content = []
+            else:
+                content.append(line)
+    yield section, content
+
+
+class _Requirement(object):
+    """Minimal stand-in for pkg_resources.Requirement."""
+
+    def __init__(self, line):
+        from packaging.requirements import Requirement
+        self._req = Requirement(line.split(' #', 1)[0].strip())
+        self.project_name = self._req.name
+        self.specs = [(spec.operator, spec.version)
+                      for spec in self._req.specifier]
+
+    def __contains__(self, version):
+        from packaging.version import InvalidVersion
+        try:
+            return self._req.specifier.contains(version, prereleases=True)
+        except InvalidVersion:
+            return False
+
+    def __str__(self):
+        return str(self._req)
+
+
+def _egg_info_name_version(egginfo):
+    """Return (name, version) parsed from a .egg-info file name.
+
+    Replacement for pkg_resources.Distribution.from_filename().
+    """
+    from packaging.utils import canonicalize_name
+    base = os.path.basename(egginfo)
+    if base.endswith('.egg-info'):
+        base = base[:-len('.egg-info')]
+    parts = base.split('-')
+    version = None
+    if len(parts) > 1 and not parts[1].startswith('py'):
+        version = parts[1]
+    if version is None:
+        raise ValueError('no version in {}'.format(egginfo))
+    return canonicalize_name(parts[0]), version
+
+
 def get_deb_depends_from_setuptools_requires(requirements, on_failure="warn"):
     """
     Suppose you can't confidently figure out a .deb which satisfies a given
@@ -341,16 +411,16 @@ def get_deb_depends_from_setuptools_requires(requirements, on_failure="warn"):
     """
     assert on_failure in ("raise", "warn", "guess"), on_failure
 
-    import pkg_resources
+    from packaging.utils import canonicalize_name
 
     depends = []  # This will be the return value from this function.
 
     parsed_reqs = []
 
-    for extra, reqs in pkg_resources.split_sections(requirements):
+    for extra, reqs in _split_sections(requirements):
         if extra:
             continue
-        parsed_reqs.extend(pkg_resources.parse_requirements(reqs))
+        parsed_reqs.extend(_Requirement(req) for req in reqs)
 
     if not parsed_reqs:
         return depends
@@ -414,15 +484,14 @@ def get_deb_depends_from_setuptools_requires(requirements, on_failure="warn"):
             eggsndebs.add((emo.group(1), dmo.group(1)))
 
     for (egginfo, debname) in eggsndebs:
-        pydist = pkg_resources.Distribution.from_filename(egginfo)
         try:
-            dd.setdefault(
-                pydist.project_name.lower(), {}).setdefault(
+            name, pydist = _egg_info_name_version(egginfo)
+            dd.setdefault(name, {}).setdefault(
                 pydist, set()).add(debname)
         except ValueError as le:
             log.warn("I got an error parsing a .egg-info file named \"%s\" "
-                     "from Debian package \"%s\" as a pkg_resources "
-                     "Distribution: %s" % (egginfo, debname, le,))
+                     "from Debian package \"%s\" as a Python "
+                     "distribution: %s" % (egginfo, debname, le,))
             pass
 
     # Now for each requirement, see if a Debian package satisfies it.
@@ -430,7 +499,7 @@ def get_deb_depends_from_setuptools_requires(requirements, on_failure="warn"):
     for req in parsed_reqs:
         reqname = req.project_name.lower()
         gooddebs = set()
-        for pydist, debs in dd.get(reqname, {}).iteritems():
+        for pydist, debs in dd.get(canonicalize_name(reqname), {}).items():
             if pydist in req:
                 # log.info("I found Debian packages \"%s\" which provides "
                 #          "Python package \"%s\", version \"%s\", which "

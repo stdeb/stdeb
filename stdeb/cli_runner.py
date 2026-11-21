@@ -10,7 +10,6 @@ from stdeb.util import stdeb_cmdline_opts, stdeb_cmd_bool_opts
 from stdeb.util import expand_sdist_file, apply_patch
 from stdeb import log
 
-from pkg_resources import Requirement, Distribution  # noqa: F401
 
 
 class OptObj:
